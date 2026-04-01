@@ -1,8 +1,10 @@
 import os
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
+from flask import Flask
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -16,6 +18,19 @@ from telegram.ext import (
 
 TOKEN = os.getenv("BOT_TOKEN")
 DB_NAME = "finance.db"
+
+# ===== Flask для Render Web Service =====
+web_app = Flask(__name__)
+
+@web_app.route("/")
+def healthcheck():
+    return "Bot is running", 200
+
+
+def run_web_server():
+    port = int(os.getenv("PORT", "10000"))
+    web_app.run(host="0.0.0.0", port=port)
+
 
 # ===== Категорії =====
 EXPENSE_CATEGORIES = [
@@ -821,21 +836,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Використай кнопки меню.", reply_markup=main_keyboard())
     return CHOOSING
 
-from flask import Flask
-import threading
-
-app_flask = Flask(__name__)
-
-@app_flask.route("/")
-def home():
-    return "Bot is running"
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host="0.0.0.0", port=port)
-
-# запускаємо веб-сервер в окремому потоці
-threading.Thread(target=run_web).start()
 
 def main():
     if not TOKEN:
@@ -843,7 +843,10 @@ def main():
 
     init_db()
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    flask_thread = threading.Thread(target=run_web_server, daemon=True)
+    flask_thread.start()
+
+    telegram_app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -887,10 +890,10 @@ def main():
         per_user=True,
     )
 
-    app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("report", manual_monthly_report))
+    telegram_app.add_handler(conv_handler)
+    telegram_app.add_handler(CommandHandler("report", manual_monthly_report))
 
-    app.job_queue.run_repeating(
+    telegram_app.job_queue.run_repeating(
         send_monthly_reports,
         interval=86400,
         first=10,
@@ -898,7 +901,7 @@ def main():
     )
 
     print("Bot is running...")
-    app.run_polling()
+    telegram_app.run_polling()
 
 
 if __name__ == "__main__":
