@@ -821,6 +821,21 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Використай кнопки меню.", reply_markup=main_keyboard())
     return CHOOSING
 
+from flask import Flask
+import threading
+
+app_flask = Flask(__name__)
+
+@app_flask.route("/")
+def home():
+    return "Bot is running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port)
+
+# запускаємо веб-сервер в окремому потоці
+threading.Thread(target=run_web).start()
 
 def main():
     if not TOKEN:
