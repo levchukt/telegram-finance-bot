@@ -15,7 +15,7 @@ from telegram.ext import (
 
 
 TOKEN = os.getenv("BOT_TOKEN")
-DB_NAME = "finance.db"
+DB_NAME = "/data/finance.db"
 
 # ===== Категорії =====
 EXPENSE_CATEGORIES = [
