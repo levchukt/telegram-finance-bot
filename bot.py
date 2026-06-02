@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from telegram import ReplyKeyboardMarkup, Update
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update, InputFile
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -13,10 +13,9 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
 
-DEFAULT_DB_PATH = "/data/finance.db" if os.path.isdir("/data") else "finance.db"
-DB_NAME = os.getenv("DB_PATH", DEFAULT_DB_PATH)
+TOKEN = os.getenv("BOT_TOKEN")
+DB_NAME = "finance.db"
 
 # ===== Категорії =====
 EXPENSE_CATEGORIES = [
@@ -39,20 +38,6 @@ INCOME_CATEGORIES = [
 ]
 
 INCOME_SCOPES = ["ФОП", "Особисті"]
-
-MAIN_MENU_BUTTONS = {
-    "Додати дохід",
-    "Додати витрату",
-    "Сьогодні",
-    "Статистика за місяць",
-    "Загальна статистика",
-    "По категоріях за місяць",
-    "Останні записи",
-    "Видалити останній запис",
-}
-
-BACK_BUTTON = "Назад"
-CANCEL_BUTTON = "Скасувати"
 
 # ===== Стани =====
 CHOOSING = 1
@@ -77,49 +62,26 @@ def main_keyboard():
         ["Загальна статистика", "По категоріях за місяць"],
         ["Останні записи", "Видалити останній запис"],
     ]
-    return ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True,
-        is_persistent=True
-    )
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 
-def keyboard_vertical(items, with_back=False, with_cancel=True):
+def keyboard_from_list(items, extra_rows=None):
     rows = [[item] for item in items]
-
-    nav_row = []
-    if with_back:
-        nav_row.append(BACK_BUTTON)
-    if with_cancel:
-        nav_row.append(CANCEL_BUTTON)
-
-    if nav_row:
-        rows.append(nav_row)
-
-    return ReplyKeyboardMarkup(
-        rows,
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
+    if extra_rows:
+        rows.extend(extra_rows)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 def confirm_keyboard():
     return ReplyKeyboardMarkup(
-        [["Підтвердити"], [BACK_BUTTON, CANCEL_BUTTON]],
+        [["Підтвердити", "Скасувати"]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
 
 
 # ===== БД =====
-def ensure_db_dir():
-    db_dir = os.path.dirname(DB_NAME)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
-
-
 def get_conn():
-    ensure_db_dir()
     return sqlite3.connect(DB_NAME)
 
 
@@ -470,102 +432,6 @@ def build_monthly_report_text(user_id: int):
     return stats + build_category_breakdown_text(breakdown, "📂 Розбивка по категоріях")
 
 
-# ===== Екрани / кроки =====
-async def show_income_scope(update: Update):
-    await update.message.reply_text(
-        "Познач дохід:",
-        reply_markup=keyboard_vertical(INCOME_SCOPES, with_back=False, with_cancel=True),
-    )
-    return INCOME_SCOPE
-
-
-async def show_income_category(update: Update):
-    await update.message.reply_text(
-        "Вибери категорію доходу:",
-        reply_markup=keyboard_vertical(INCOME_CATEGORIES, with_back=True, with_cancel=True),
-    )
-    return INCOME_CATEGORY
-
-
-async def show_income_amount(update: Update):
-    await update.message.reply_text(
-        "Введи суму доходу:",
-        reply_markup=keyboard_vertical([], with_back=True, with_cancel=True),
-    )
-    return INCOME_AMOUNT
-
-
-async def show_income_comment(update: Update):
-    await update.message.reply_text(
-        "Напиши коментар або '-' якщо без коментаря:",
-        reply_markup=keyboard_vertical([], with_back=True, with_cancel=True),
-    )
-    return INCOME_COMMENT
-
-
-async def show_income_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        build_pending_summary(context.user_data),
-        reply_markup=confirm_keyboard(),
-    )
-    return INCOME_CONFIRM
-
-
-async def show_expense_category(update: Update):
-    await update.message.reply_text(
-        "Вибери категорію витрати:",
-        reply_markup=keyboard_vertical(EXPENSE_CATEGORIES, with_back=False, with_cancel=True),
-    )
-    return EXPENSE_CATEGORY
-
-
-async def show_expense_amount(update: Update):
-    await update.message.reply_text(
-        "Введи суму витрати:",
-        reply_markup=keyboard_vertical([], with_back=True, with_cancel=True),
-    )
-    return EXPENSE_AMOUNT
-
-
-async def show_expense_comment(update: Update):
-    await update.message.reply_text(
-        "Напиши коментар або '-' якщо без коментаря:",
-        reply_markup=keyboard_vertical([], with_back=True, with_cancel=True),
-    )
-    return EXPENSE_COMMENT
-
-
-async def show_expense_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        build_pending_summary(context.user_data),
-        reply_markup=confirm_keyboard(),
-    )
-    return EXPENSE_CONFIRM
-
-
-# ===== Універсальні хелпери =====
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.message.reply_text(
-        "Дію скасовано.",
-        reply_markup=main_keyboard()
-    )
-    return CHOOSING
-
-
-async def redirect_if_cancel_or_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-
-    if text == CANCEL_BUTTON:
-        return await cancel(update, context)
-
-    if text in MAIN_MENU_BUTTONS:
-        context.user_data.clear()
-        return await handle_menu(update, context)
-
-    return None
-
-
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -575,8 +441,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привіт. Я бот для обліку доходів і витрат.\n\n"
         "Вибери дію кнопкою нижче.",
-        reply_markup=main_keyboard()
+        reply_markup=main_keyboard(),
     )
+    return CHOOSING
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("Дію скасовано.", reply_markup=main_keyboard())
     return CHOOSING
 
 
@@ -584,17 +456,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["tx_type"] = "income"
-    return await show_income_scope(update)
+
+    await update.message.reply_text(
+        "Познач дохід:",
+        reply_markup=keyboard_from_list(INCOME_SCOPES, extra_rows=[["Скасувати"]]),
+    )
+    return INCOME_SCOPE
 
 
 async def income_scope(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
     text = update.message.text.strip()
 
-    if text == BACK_BUTTON:
+    if text == "Скасувати":
         return await cancel(update, context)
 
     if text not in INCOME_SCOPES:
@@ -602,77 +475,67 @@ async def income_scope(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return INCOME_SCOPE
 
     context.user_data["scope"] = text
-    return await show_income_category(update)
+
+    await update.message.reply_text(
+        "Вибери категорію доходу:",
+        reply_markup=keyboard_from_list(INCOME_CATEGORIES, extra_rows=[["Скасувати"]]),
+    )
+    return INCOME_CATEGORY
 
 
 async def income_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
     text = update.message.text.strip()
 
-    if text == BACK_BUTTON:
-        return await show_income_scope(update)
+    if text == "Скасувати":
+        return await cancel(update, context)
 
     if text not in INCOME_CATEGORIES:
         await update.message.reply_text("Вибери категорію кнопкою.")
         return INCOME_CATEGORY
 
     context.user_data["category"] = text
-    return await show_income_amount(update)
+
+    await update.message.reply_text(
+        "Введи суму доходу:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return INCOME_AMOUNT
 
 
 async def income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
-    text = update.message.text.strip()
-
-    if text == BACK_BUTTON:
-        return await show_income_category(update)
-
-    amount = parse_amount(text)
+    amount = parse_amount(update.message.text)
 
     if amount is None:
         await update.message.reply_text("Некоректна сума. Напиши число, наприклад 500 або 500.50")
         return INCOME_AMOUNT
 
     context.user_data["amount"] = amount
-    return await show_income_comment(update)
+    await update.message.reply_text("Напиши коментар або '-' якщо без коментаря:")
+    return INCOME_COMMENT
 
 
 async def income_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
-    text = update.message.text.strip()
-
-    if text == BACK_BUTTON:
-        return await show_income_amount(update)
-
-    comment = text
+    comment = update.message.text.strip()
     if comment == "-":
         comment = None
 
     context.user_data["comment"] = comment
-    return await show_income_confirm(update, context)
+
+    await update.message.reply_text(
+        build_pending_summary(context.user_data),
+        reply_markup=confirm_keyboard(),
+    )
+    return INCOME_CONFIRM
 
 
 async def income_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
     text = update.message.text.strip()
 
-    if text == BACK_BUTTON:
-        return await show_income_comment(update)
+    if text == "Скасувати":
+        return await cancel(update, context)
 
     if text != "Підтвердити":
-        await update.message.reply_text("Натисни Підтвердити, Назад або Скасувати.")
+        await update.message.reply_text("Натисни Підтвердити або Скасувати.")
         return INCOME_CONFIRM
 
     user_id = update.effective_user.id
@@ -710,17 +573,18 @@ async def income_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["tx_type"] = "expense"
-    return await show_expense_category(update)
+
+    await update.message.reply_text(
+        "Вибери категорію витрати:",
+        reply_markup=keyboard_from_list(EXPENSE_CATEGORIES, extra_rows=[["Скасувати"]]),
+    )
+    return EXPENSE_CATEGORY
 
 
 async def expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
     text = update.message.text.strip()
 
-    if text == BACK_BUTTON:
+    if text == "Скасувати":
         return await cancel(update, context)
 
     if text not in EXPENSE_CATEGORIES:
@@ -728,59 +592,48 @@ async def expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return EXPENSE_CATEGORY
 
     context.user_data["category"] = text
-    return await show_expense_amount(update)
+
+    await update.message.reply_text(
+        "Введи суму витрати:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return EXPENSE_AMOUNT
 
 
 async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
-    text = update.message.text.strip()
-
-    if text == BACK_BUTTON:
-        return await show_expense_category(update)
-
-    amount = parse_amount(text)
+    amount = parse_amount(update.message.text)
 
     if amount is None:
         await update.message.reply_text("Некоректна сума. Напиши число, наприклад 250 або 250.75")
         return EXPENSE_AMOUNT
 
     context.user_data["amount"] = amount
-    return await show_expense_comment(update)
+    await update.message.reply_text("Напиши коментар або '-' якщо без коментаря:")
+    return EXPENSE_COMMENT
 
 
 async def expense_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
-    text = update.message.text.strip()
-
-    if text == BACK_BUTTON:
-        return await show_expense_amount(update)
-
-    comment = text
+    comment = update.message.text.strip()
     if comment == "-":
         comment = None
 
     context.user_data["comment"] = comment
-    return await show_expense_confirm(update, context)
+
+    await update.message.reply_text(
+        build_pending_summary(context.user_data),
+        reply_markup=confirm_keyboard(),
+    )
+    return EXPENSE_CONFIRM
 
 
 async def expense_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    redirected = await redirect_if_cancel_or_menu(update, context)
-    if redirected is not None:
-        return redirected
-
     text = update.message.text.strip()
 
-    if text == BACK_BUTTON:
-        return await show_expense_comment(update)
+    if text == "Скасувати":
+        return await cancel(update, context)
 
     if text != "Підтвердити":
-        await update.message.reply_text("Натисни Підтвердити, Назад або Скасувати.")
+        await update.message.reply_text("Натисни Підтвердити або Скасувати.")
         return EXPENSE_CONFIRM
 
     user_id = update.effective_user.id
@@ -815,10 +668,7 @@ async def expense_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== Меню =====
 async def today_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    await update.message.reply_text(
-        format_today_stats(user_id),
-        reply_markup=main_keyboard()
-    )
+    await update.message.reply_text(format_today_stats(user_id), reply_markup=main_keyboard())
     return CHOOSING
 
 
@@ -925,11 +775,7 @@ async def send_monthly_reports(context: ContextTypes.DEFAULT_TYPE):
         report_text = build_monthly_report_text(user_id)
 
         try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=report_text,
-                reply_markup=main_keyboard()
-            )
+            await context.bot.send_message(chat_id=chat_id, text=report_text, reply_markup=main_keyboard())
             update_last_monthly_report_sent(user_id, month_key)
         except Exception:
             pass
@@ -941,6 +787,17 @@ async def manual_monthly_report(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text(text, reply_markup=main_keyboard())
     return CHOOSING
 
+
+async def export_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not os.path.exists(DB_NAME):
+        await update.message.reply_text("Файл бази даних не знайдено.")
+        return
+
+    with open(DB_NAME, "rb") as db_file:
+        await update.message.reply_document(
+            document=InputFile(db_file, filename="finance.db"),
+            caption="Файл бази даних"
+        )
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -969,13 +826,10 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "Видалити останній запис":
         return await delete_last(update, context)
 
-    if text == CANCEL_BUTTON:
+    if text == "Скасувати":
         return await cancel(update, context)
 
-    await update.message.reply_text(
-        "Використай кнопки меню.",
-        reply_markup=main_keyboard()
-    )
+    await update.message.reply_text("Використай кнопки меню.", reply_markup=main_keyboard())
     return CHOOSING
 
 
@@ -1024,22 +878,21 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel),
             CommandHandler("report", manual_monthly_report),
-            CommandHandler("start", start),
         ],
         per_chat=True,
         per_user=True,
     )
 
     app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("exportdb", export_db))
     app.add_handler(CommandHandler("report", manual_monthly_report))
 
-    if app.job_queue is not None:
-        app.job_queue.run_repeating(
-            send_monthly_reports,
-            interval=86400,
-            first=10,
-            name="monthly_reports_checker",
-        )
+    app.job_queue.run_repeating(
+        send_monthly_reports,
+        interval=86400,
+        first=10,
+        name="monthly_reports_checker",
+    )
 
     print("Bot is running...")
     app.run_polling()
