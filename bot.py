@@ -1,10 +1,13 @@
+# bot.py
 
-import csv
+
 import os
 import shutil
 import sqlite3
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+
+from openpyxl import Workbook
 
 from telegram import (
     InputFile,
@@ -23,8 +26,10 @@ from telegram.ext import (
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-DEFAULT_DB_PATH = "/data/finance.db"
-DB_NAME = os.getenv("DB_PATH", DEFAULT_DB_PATH)
+DB_NAME = os.getenv(
+    "DB_PATH",
+    "/data/finance.db"
+)
 
 BACKUP_DIR = "/data/backups"
 
@@ -34,17 +39,17 @@ BACKUP_DIR = "/data/backups"
 
 EXPENSE_CATEGORIES = [
     "Їжа",
+    "Кава",
+    "Алкоголь",
+    "Оренда",
+    "Одяг",
     "Транспорт",
     "Реклама",
-    "Оренда",
     "Підписки",
     "Техніка",
     "Побут",
     "Розваги",
-    "Алкоголь",
-    "Кава",
     "Ліки",
-    "Одяг",
     "Інше",
 ]
 
@@ -83,18 +88,21 @@ MAIN_BUTTONS = {
 }
 
 # =========================
-# Стани
+# States
 # =========================
 
 (
     CHOOSING,
+
     INCOME_SCOPE,
     INCOME_CATEGORY,
     INCOME_AMOUNT,
     INCOME_CONFIRM,
+
     EXPENSE_CATEGORY,
     EXPENSE_AMOUNT,
     EXPENSE_CONFIRM,
+
 ) = range(8)
 
 # =========================
@@ -105,7 +113,7 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         MAIN_MENU,
         resize_keyboard=True,
-        is_persistent=True,
+        is_persistent=True
     )
 
 
@@ -124,7 +132,7 @@ def vertical_keyboard(items, back=False):
     return ReplyKeyboardMarkup(
         rows,
         resize_keyboard=True,
-        one_time_keyboard=True,
+        one_time_keyboard=True
     )
 
 
@@ -132,9 +140,8 @@ def confirm_keyboard():
     return ReplyKeyboardMarkup(
         [["Підтвердити"], [BACK_BUTTON, CANCEL_BUTTON]],
         resize_keyboard=True,
-        one_time_keyboard=True,
+        one_time_keyboard=True
     )
-
 
 # =========================
 # DB
@@ -166,13 +173,24 @@ def init_db():
     conn.close()
 
 
-def add_transaction(tx_type, scope, category, amount):
+def add_transaction(
+    tx_type,
+    scope,
+    category,
+    amount
+):
     conn = db_conn()
     cur = conn.cursor()
 
     cur.execute("""
     INSERT INTO transactions
-    (tx_type, scope, category, amount, created_at)
+    (
+        tx_type,
+        scope,
+        category,
+        amount,
+        created_at
+    )
     VALUES (?, ?, ?, ?, ?)
     """, (
         tx_type,
@@ -210,11 +228,11 @@ def delete_last_transaction():
     conn.close()
 
 
-def get_all_transactions():
+def get_transactions(limit=None):
     conn = db_conn()
     cur = conn.cursor()
 
-    cur.execute("""
+    query = """
     SELECT
         tx_type,
         scope,
@@ -223,14 +241,18 @@ def get_all_transactions():
         created_at
     FROM transactions
     ORDER BY created_at DESC
-    """)
+    """
+
+    if limit:
+        query += f" LIMIT {limit}"
+
+    cur.execute(query)
 
     rows = cur.fetchall()
 
     conn.close()
 
     return rows
-
 
 # =========================
 # Helpers
@@ -251,25 +273,31 @@ def parse_amount(text):
         return None
 
 
-def month_stats():
-    now = datetime.now()
-
-    start = datetime(
-        now.year,
-        now.month,
-        1
-    ).isoformat()
-
+def get_range_stats(start_iso, end_iso):
     conn = db_conn()
     cur = conn.cursor()
 
     cur.execute("""
     SELECT
-        COALESCE(SUM(CASE WHEN tx_type='income' THEN amount END),0),
-        COALESCE(SUM(CASE WHEN tx_type='expense' THEN amount END),0)
+        COALESCE(SUM(
+            CASE
+                WHEN tx_type='income'
+                THEN amount
+            END
+        ),0),
+
+        COALESCE(SUM(
+            CASE
+                WHEN tx_type='expense'
+                THEN amount
+            END
+        ),0)
+
     FROM transactions
+
     WHERE created_at >= ?
-    """, (start,))
+    AND created_at < ?
+    """, (start_iso, end_iso))
 
     income, expense = cur.fetchone()
 
@@ -278,14 +306,64 @@ def month_stats():
     return income, expense
 
 
+def today_stats():
+    now = datetime.now()
+
+    start = datetime(
+        now.year,
+        now.month,
+        now.day
+    )
+
+    end = start + timedelta(days=1)
+
+    return get_range_stats(
+        start.isoformat(),
+        end.isoformat()
+    )
+
+
+def month_stats():
+    now = datetime.now()
+
+    start = datetime(
+        now.year,
+        now.month,
+        1
+    )
+
+    if now.month == 12:
+        end = datetime(now.year + 1, 1, 1)
+
+    else:
+        end = datetime(now.year, now.month + 1, 1)
+
+    return get_range_stats(
+        start.isoformat(),
+        end.isoformat()
+    )
+
+
 def total_stats():
     conn = db_conn()
     cur = conn.cursor()
 
     cur.execute("""
     SELECT
-        COALESCE(SUM(CASE WHEN tx_type='income' THEN amount END),0),
-        COALESCE(SUM(CASE WHEN tx_type='expense' THEN amount END),0)
+        COALESCE(SUM(
+            CASE
+                WHEN tx_type='income'
+                THEN amount
+            END
+        ),0),
+
+        COALESCE(SUM(
+            CASE
+                WHEN tx_type='expense'
+                THEN amount
+            END
+        ),0)
+
     FROM transactions
     """)
 
@@ -295,24 +373,6 @@ def total_stats():
 
     return income, expense
 
-
-def format_stats():
-    month_income, month_expense = month_stats()
-
-    total_income, total_expense = total_stats()
-
-    return (
-        f"📅 Місяць:\n"
-        f"Доходи: {month_income:.2f} грн\n"
-        f"Витрати: {month_expense:.2f} грн\n"
-        f"Баланс: {(month_income - month_expense):.2f} грн\n\n"
-        f"📊 Загалом:\n"
-        f"Доходи: {total_income:.2f} грн\n"
-        f"Витрати: {total_expense:.2f} грн\n"
-        f"Баланс: {(total_income - total_expense):.2f} грн"
-    )
-
-
 # =========================
 # Backup
 # =========================
@@ -321,9 +381,13 @@ def create_backup():
     if not os.path.exists(DB_NAME):
         return None
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    timestamp = datetime.now().strftime(
+        "%Y-%m-%d_%H-%M"
+    )
 
-    backup_name = f"finance_backup_{timestamp}.db"
+    backup_name = (
+        f"finance_backup_{timestamp}.db"
+    )
 
     backup_path = os.path.join(
         BACKUP_DIR,
@@ -335,13 +399,17 @@ def create_backup():
     return backup_path
 
 
-async def auto_backup(context: ContextTypes.DEFAULT_TYPE):
+async def auto_backup(
+    context: ContextTypes.DEFAULT_TYPE
+):
     backup_path = create_backup()
 
     if not backup_path:
         return
 
-    admin_chat_id = os.getenv("ADMIN_CHAT_ID")
+    admin_chat_id = os.getenv(
+        "ADMIN_CHAT_ID"
+    )
 
     if not admin_chat_id:
         return
@@ -352,14 +420,15 @@ async def auto_backup(context: ContextTypes.DEFAULT_TYPE):
                 chat_id=admin_chat_id,
                 document=InputFile(
                     file,
-                    filename=os.path.basename(backup_path)
+                    filename=os.path.basename(
+                        backup_path
+                    )
                 ),
-                caption="Автоматичний backup БД"
+                caption="Backup БД"
             )
 
     except Exception as e:
         print("Backup error:", e)
-
 
 # =========================
 # Universal
@@ -376,7 +445,10 @@ async def cancel(update, context):
     return CHOOSING
 
 
-async def handle_redirect(update, context):
+async def handle_redirect(
+    update,
+    context
+):
     text = update.message.text
 
     if text == CANCEL_BUTTON:
@@ -385,10 +457,12 @@ async def handle_redirect(update, context):
     if text in MAIN_BUTTONS:
         context.user_data.clear()
 
-        return await handle_menu(update, context)
+        return await handle_menu(
+            update,
+            context
+        )
 
     return None
-
 
 # =========================
 # Start
@@ -402,7 +476,6 @@ async def start(update, context):
 
     return CHOOSING
 
-
 # =========================
 # Income
 # =========================
@@ -412,14 +485,19 @@ async def start_income(update, context):
 
     await update.message.reply_text(
         "ФОП чи Особисті?",
-        reply_markup=vertical_keyboard(INCOME_SCOPES)
+        reply_markup=vertical_keyboard(
+            INCOME_SCOPES
+        )
     )
 
     return INCOME_SCOPE
 
 
 async def income_scope(update, context):
-    redirected = await handle_redirect(update, context)
+    redirected = await handle_redirect(
+        update,
+        context
+    )
 
     if redirected is not None:
         return redirected
@@ -443,7 +521,10 @@ async def income_scope(update, context):
 
 
 async def income_category(update, context):
-    redirected = await handle_redirect(update, context)
+    redirected = await handle_redirect(
+        update,
+        context
+    )
 
     if redirected is not None:
         return redirected
@@ -451,20 +532,29 @@ async def income_category(update, context):
     text = update.message.text
 
     if text == BACK_BUTTON:
-        return await start_income(update, context)
+        return await start_income(
+            update,
+            context
+        )
 
     context.user_data["category"] = text
 
     await update.message.reply_text(
         "Введи суму:",
-        reply_markup=vertical_keyboard([], back=True)
+        reply_markup=vertical_keyboard(
+            [],
+            back=True
+        )
     )
 
     return INCOME_AMOUNT
 
 
 async def income_amount(update, context):
-    redirected = await handle_redirect(update, context)
+    redirected = await handle_redirect(
+        update,
+        context
+    )
 
     if redirected is not None:
         return redirected
@@ -472,7 +562,10 @@ async def income_amount(update, context):
     text = update.message.text
 
     if text == BACK_BUTTON:
-        return await income_scope(update, context)
+        return await income_scope(
+            update,
+            context
+        )
 
     amount = parse_amount(text)
 
@@ -497,7 +590,10 @@ async def income_amount(update, context):
 
 
 async def income_confirm(update, context):
-    redirected = await handle_redirect(update, context)
+    redirected = await handle_redirect(
+        update,
+        context
+    )
 
     if redirected is not None:
         return redirected
@@ -505,7 +601,15 @@ async def income_confirm(update, context):
     text = update.message.text
 
     if text == BACK_BUTTON:
-        return await income_category(update, context)
+        await update.message.reply_text(
+            "Введи суму:",
+            reply_markup=vertical_keyboard(
+                [],
+                back=True
+            )
+        )
+
+        return INCOME_AMOUNT
 
     if text != "Підтвердити":
         return INCOME_CONFIRM
@@ -520,12 +624,11 @@ async def income_confirm(update, context):
     context.user_data.clear()
 
     await update.message.reply_text(
-        "✅ Дохід додано\n\n" + format_stats(),
+        "✅ Дохід додано",
         reply_markup=main_keyboard()
     )
 
     return CHOOSING
-
 
 # =========================
 # Expense
@@ -536,14 +639,19 @@ async def start_expense(update, context):
 
     await update.message.reply_text(
         "Категорія витрати:",
-        reply_markup=vertical_keyboard(EXPENSE_CATEGORIES)
+        reply_markup=vertical_keyboard(
+            EXPENSE_CATEGORIES
+        )
     )
 
     return EXPENSE_CATEGORY
 
 
 async def expense_category(update, context):
-    redirected = await handle_redirect(update, context)
+    redirected = await handle_redirect(
+        update,
+        context
+    )
 
     if redirected is not None:
         return redirected
@@ -557,14 +665,20 @@ async def expense_category(update, context):
 
     await update.message.reply_text(
         "Введи суму:",
-        reply_markup=vertical_keyboard([], back=True)
+        reply_markup=vertical_keyboard(
+            [],
+            back=True
+        )
     )
 
     return EXPENSE_AMOUNT
 
 
 async def expense_amount(update, context):
-    redirected = await handle_redirect(update, context)
+    redirected = await handle_redirect(
+        update,
+        context
+    )
 
     if redirected is not None:
         return redirected
@@ -572,7 +686,10 @@ async def expense_amount(update, context):
     text = update.message.text
 
     if text == BACK_BUTTON:
-        return await expense_category(update, context)
+        return await expense_category(
+            update,
+            context
+        )
 
     amount = parse_amount(text)
 
@@ -596,7 +713,10 @@ async def expense_amount(update, context):
 
 
 async def expense_confirm(update, context):
-    redirected = await handle_redirect(update, context)
+    redirected = await handle_redirect(
+        update,
+        context
+    )
 
     if redirected is not None:
         return redirected
@@ -604,7 +724,15 @@ async def expense_confirm(update, context):
     text = update.message.text
 
     if text == BACK_BUTTON:
-        return await expense_category(update, context)
+        await update.message.reply_text(
+            "Введи суму:",
+            reply_markup=vertical_keyboard(
+                [],
+                back=True
+            )
+        )
+
+        return EXPENSE_AMOUNT
 
     if text != "Підтвердити":
         return EXPENSE_CONFIRM
@@ -619,20 +747,24 @@ async def expense_confirm(update, context):
     context.user_data.clear()
 
     await update.message.reply_text(
-        "✅ Витрату додано\n\n" + format_stats(),
+        "✅ Витрату додано",
         reply_markup=main_keyboard()
     )
 
     return CHOOSING
-
 
 # =========================
 # Menu
 # =========================
 
 async def today(update, context):
+    income, expense = today_stats()
+
     await update.message.reply_text(
-        format_stats(),
+        f"📅 Сьогодні:\n\n"
+        f"Доходи: {income:.2f} грн\n"
+        f"Витрати: {expense:.2f} грн\n"
+        f"Баланс: {(income-expense):.2f} грн",
         reply_markup=main_keyboard()
     )
 
@@ -672,10 +804,16 @@ async def categories(update, context):
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT category, SUM(amount)
+    SELECT
+        category,
+        SUM(amount)
+
     FROM transactions
+
     WHERE tx_type='expense'
+
     GROUP BY category
+
     ORDER BY SUM(amount) DESC
     """)
 
@@ -690,7 +828,10 @@ async def categories(update, context):
         text = "📂 Категорії витрат:\n\n"
 
         for category, amount in rows:
-            text += f"{category}: {amount:.2f} грн\n"
+            text += (
+                f"{category}: "
+                f"{amount:.2f} грн\n"
+            )
 
     await update.message.reply_text(
         text,
@@ -701,7 +842,7 @@ async def categories(update, context):
 
 
 async def recent(update, context):
-    rows = get_all_transactions()[:10]
+    rows = get_transactions(limit=10)
 
     if not rows:
         await update.message.reply_text(
@@ -720,7 +861,8 @@ async def recent(update, context):
 
         text += (
             f"{created_at[:16]}\n"
-            f"{sign}{amount:.2f} грн | {category}\n"
+            f"{sign}{amount:.2f} грн | "
+            f"{category}\n"
         )
 
         if scope:
@@ -746,7 +888,6 @@ async def delete_last(update, context):
 
     return CHOOSING
 
-
 # =========================
 # Export DB
 # =========================
@@ -768,35 +909,35 @@ async def export_db(update, context):
             caption="SQLite база"
         )
 
-
 # =========================
-# Export Excel CSV
+# Export Excel
 # =========================
 
 async def export_excel(update, context):
-    rows = get_all_transactions()
+    rows = get_transactions()
 
-    filename = "finance_export.csv"
+    wb = Workbook()
 
-    with open(
-        filename,
-        "w",
-        newline="",
-        encoding="utf-8-sig"
-    ) as f:
+    ws = wb.active
 
-        writer = csv.writer(f)
+    ws.title = "Фінанси"
 
-        writer.writerow([
-            "Тип",
-            "Позначення",
-            "Категорія",
-            "Сума",
-            "Дата"
-        ])
+    headers = [
+        "Тип",
+        "Позначення",
+        "Категорія",
+        "Сума",
+        "Дата"
+    ]
 
-        for row in rows:
-            writer.writerow(row)
+    ws.append(headers)
+
+    for row in rows:
+        ws.append(row)
+
+    filename = "finance_export.xlsx"
+
+    wb.save(filename)
 
     with open(filename, "rb") as file:
         await update.message.reply_document(
@@ -804,11 +945,10 @@ async def export_excel(update, context):
                 file,
                 filename=filename
             ),
-            caption="CSV експорт"
+            caption="Excel експорт"
         )
 
     os.remove(filename)
-
 
 # =========================
 # Router
@@ -818,31 +958,58 @@ async def handle_menu(update, context):
     text = update.message.text
 
     if text == "Додати дохід":
-        return await start_income(update, context)
+        return await start_income(
+            update,
+            context
+        )
 
     if text == "Додати витрату":
-        return await start_expense(update, context)
+        return await start_expense(
+            update,
+            context
+        )
 
     if text == "Сьогодні":
-        return await today(update, context)
+        return await today(
+            update,
+            context
+        )
 
     if text == "Статистика за місяць":
-        return await monthly(update, context)
+        return await monthly(
+            update,
+            context
+        )
 
     if text == "Загальна статистика":
-        return await total(update, context)
+        return await total(
+            update,
+            context
+        )
 
     if text == "По категоріях":
-        return await categories(update, context)
+        return await categories(
+            update,
+            context
+        )
 
     if text == "Останні записи":
-        return await recent(update, context)
+        return await recent(
+            update,
+            context
+        )
 
     if text == "Видалити останній запис":
-        return await delete_last(update, context)
+        return await delete_last(
+            update,
+            context
+        )
 
     if text == CANCEL_BUTTON:
-        return await cancel(update, context)
+        return await cancel(
+            update,
+            context
+        )
 
     await update.message.reply_text(
         "Використай кнопки",
@@ -851,7 +1018,6 @@ async def handle_menu(update, context):
 
     return CHOOSING
 
-
 # =========================
 # Main
 # =========================
@@ -859,7 +1025,11 @@ async def handle_menu(update, context):
 def main():
     init_db()
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .build()
+    )
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -867,60 +1037,61 @@ def main():
         ],
 
         states={
+
             CHOOSING: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     handle_menu
-                ),
+                )
             ],
 
             INCOME_SCOPE: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     income_scope
-                ),
+                )
             ],
 
             INCOME_CATEGORY: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     income_category
-                ),
+                )
             ],
 
             INCOME_AMOUNT: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     income_amount
-                ),
+                )
             ],
 
             INCOME_CONFIRM: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     income_confirm
-                ),
+                )
             ],
 
             EXPENSE_CATEGORY: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     expense_category
-                ),
+                )
             ],
 
             EXPENSE_AMOUNT: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     expense_amount
-                ),
+                )
             ],
 
             EXPENSE_CONFIRM: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     expense_confirm
-                ),
+                )
             ],
         },
 
@@ -946,7 +1117,7 @@ def main():
         )
     )
 
-    # backup раз в 14 днів
+    # backup кожні 14 днів
     app.job_queue.run_repeating(
         auto_backup,
         interval=60 * 60 * 24 * 14,
@@ -955,10 +1126,7 @@ def main():
 
     print("Bot started")
 
-    app.run_polling(
-        drop_pending_updates=True
-    )
-
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
