@@ -507,6 +507,13 @@ async def income_scope(update, context):
     if text == BACK_BUTTON:
         return await cancel(update, context)
 
+    if text not in INCOME_SCOPES:
+        await update.message.reply_text(
+            "Використай кнопки",
+            reply_markup=vertical_keyboard(INCOME_SCOPES)
+        )
+        return INCOME_SCOPE
+
     context.user_data["scope"] = text
 
     await update.message.reply_text(
@@ -562,10 +569,15 @@ async def income_amount(update, context):
     text = update.message.text
 
     if text == BACK_BUTTON:
-        return await income_scope(
-            update,
-            context
+        await update.message.reply_text(
+            "Категорія доходу:",
+            reply_markup=vertical_keyboard(
+                INCOME_CATEGORIES,
+                back=True
+            )
         )
+
+        return INCOME_CATEGORY
 
     amount = parse_amount(text)
 
@@ -578,10 +590,13 @@ async def income_amount(update, context):
 
     context.user_data["amount"] = amount
 
+    scope = context.user_data.get("scope", "")
+    category = context.user_data.get("category", "")
+
     await update.message.reply_text(
         f"Підтвердити дохід?\n\n"
-        f"{context.user_data['scope']}\n"
-        f"{context.user_data['category']}\n"
+        f"{scope}\n"
+        f"{category}\n"
         f"{amount:.2f} грн",
         reply_markup=confirm_keyboard()
     )
@@ -935,7 +950,7 @@ async def export_excel(update, context):
     for row in rows:
         ws.append(row)
 
-    filename = "finance_export.xlsx"
+    filename = "/tmp/finance_export.xlsx"
 
     wb.save(filename)
 
@@ -1130,4 +1145,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
